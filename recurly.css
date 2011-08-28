@@ -16,7 +16,6 @@
 }
 .recurly .plan {
   color: #333;
-  overflow: hidden;
   position: relative;
   zoom: 1;
 }
@@ -630,7 +629,7 @@
   background-image: -webkit-gradient(linear, 0% 20%, 0% 100%, from(#fecd00), to(#ce7b00));
   background: -moz-linear-gradient(top, #fecd00, #ce7b00);
   text-shadow: rgba(255,255,255,0.50) 0 1px 0;
-  padding: 10px 20px;
+  padding: 0px;
 }
 .recurly button.submit:hover {
   color: #451;
@@ -668,3 +667,4 @@
   -webkit-box-shadow: rgba(255,255,255,0.69) 0px 1px 0px inset, rgba(0,0,0,0.26) 0px 2px 3px;
   box-shadow: rgba(255,255,255,0.70) 0px 1px 0px inset, rgba(0,0,0,0.27) 0px 2px 3px;
 }
+
