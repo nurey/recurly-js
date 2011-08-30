@@ -461,28 +461,35 @@ R.replaceVars = function(str, vars) {
   return str;
 };
 
-R.post = function(url, params, urlEncoded) {
-    var form = $('<form />').hide();
-    form.attr('action', url)
-        .attr('method', 'POST')
-        .attr('enctype', urlEncoded ? 'application/x-www-form-urlencoded' : 'multipart/form-data');
+R.post = function(url, params, options) {
 
-    function addParam(name, value, parent) {
-      var fullname = (parent.length > 0 ? (parent + '[' + name + ']') : name);
-      if(typeof value === 'object') {
-        for(var i in value) {
-          if(value.hasOwnProperty(i)) {
-            addParam(i, value[i], fullname);
-          }
+  if(options.resultNamespace) {
+    var newParams = {};
+    newParams[options.resultNamespace] = params;
+    params = newParams;
+  }
+
+  var form = $('<form />').hide();
+  form.attr('action', url)
+      .attr('method', 'POST')
+      .attr('enctype', 'application/x-www-form-urlencoded');
+
+  function addParam(name, value, parent) {
+    var fullname = (parent.length > 0 ? (parent + '[' + name + ']') : name);
+    if(typeof value === 'object') {
+      for(var i in value) {
+        if(value.hasOwnProperty(i)) {
+          addParam(i, value[i], fullname);
         }
       }
-      else $('<input type="hidden" />').attr({name: fullname, value: value}).appendTo(form);
-    };
+    }
+    else $('<input type="hidden" />').attr({name: fullname, value: value}).appendTo(form);
+  };
 
-    addParam('', params, '');
+  addParam('', params, '');
 
-    $('body').append(form);
-    form.submit();
+  $('body').append(form);
+  form.submit();
 };
 
 
@@ -642,6 +649,7 @@ R.Account = {
     return {
       first_name: this.firstName
     , last_name: this.lastName
+    , company_name: this.companyName
     , account_code: this.code
     , email: this.email
     };
@@ -672,6 +680,7 @@ R.BillingInfo = {
     , state: this.state
     , zip: this.zip
     , country: this.country
+    , phone: this.phone
     };
   }
 , save: function(options) { 
@@ -679,6 +688,16 @@ R.BillingInfo = {
       billing_info: this.toJSON() 
     , signature: options.signature
     };
+
+    // Save first/last name on the account
+    // if not distinguished
+    if(!options.distinguishContactFromBillingInfo) {
+      json.account = {
+        account_code: options.accountCode
+      , first_name: this.firstName
+      , last_name: this.lastName
+      };
+    }
 
     $.ajax({
       url: R.settings.baseURL+'accounts/'+options.accountCode+'/billing_info/update'
@@ -888,9 +907,9 @@ R.Subscription.getCoupon = function(couponCode, successCallback, errorCallback) 
     jsonp: "callback",
     timeout: 10000,
     success: function(data) {
-      var coupon = R.Coupon.fromJSON(data);
-      coupon.code = couponCode;
       if(data.valid) {
+        var coupon = R.Coupon.fromJSON(data);
+        coupon.code = couponCode;
         successCallback(coupon);
       }
       else {
@@ -1058,7 +1077,59 @@ function displayServerErrors($form, errors) {
 }
 
 
+var preFillMap = {
+  contactInfo: {
+    firstName:      '.contact_info > .full_name > .first_name > input'
+  , lastName:       '.contact_info > .full_name > .last_name > input'
+  , email:          '.contact_info > .email > input'
+  , phone:          '.contact_info > .phone > input'
+  , companyName:    '.contact_info > .company_name > input'
+  }
+, billingInfo: {
+    firstName:      '.billing_info > .full_name > .first_name > input'
+  , lastName:       '.billing_info > .full_name > .last_name > input'
+  , address1:       '.billing_info > .address > .address1 > input'
+  , address2:       '.billing_info > .address > .address2 > input'
+  , country:        '.billing_info > .address > .country > select'
+  , city:           '.billing_info > .address > .city > input'
+  , state:          '.billing_info > .address > .state_zip > .state > input'
+  , zip:            '.billing_info > .address > .state_zip > .zip > input'
+  , vatNumber:      '.billing_info > .vat_number > input'
+  }
+};
+
+function preFillValues($form, preFill, mapObject) {
+
+  if(!preFill) return;
+
+  for(var k in preFill) {
+    if(preFill.hasOwnProperty(k) && mapObject.hasOwnProperty(k)) {
+
+      var v = preFill[k];
+      var selectorOrNested = mapObject[k];
+
+      // jquery selector
+      if(typeof selectorOrNested == 'string') {
+        $form.find(selectorOrNested).val(v).change();
+      }
+      // nested mapping
+      else if(typeof selectorOrNested == 'object') {
+        preFillValues($form, v, selectorOrNested);
+      }
+    }
+  }
+}
+
+
 function initCommonForm($form, options) {
+
+  if(!options.collectPhone) {
+    $form.find('.phone').remove();
+  }
+
+  if(!options.collectCompany) {
+    $form.find('.company_name').remove();
+  }
 
   $form.delegate('.placeholder', 'click', function() {
     var $label = $(this);
@@ -1094,16 +1165,10 @@ function initCommonForm($form, options) {
     }
   });
   
+  preFillValues($form, options.preFill, preFillMap);
 }
 
-function initBillingInfoForm($form, options) {
-  // == DEFAULT BUYER TO SELLER COUNTRY
-  if(R.settings.country) {
-    var $countryOpt = $form.find('.country option[value='+R.settings.country+']');
-    if($countryOpt.length) {
-      $countryOpt.attr('selected', true).change();
-    }
-  }
+function initContactInfoForm($form, options) {
 
   // == FIRSTNAME / LASTNAME REDUNDANCY
   if(options.distinguishContactFromBillingInfo) { 
@@ -1131,6 +1196,18 @@ function initBillingInfoForm($form, options) {
     $form.find('.billing_info .first_name, .billing_info .last_name').remove();
   }
 
+}
+
+function initBillingInfoForm($form, options) {
+
+  // == DEFAULT BUYER TO SELLER COUNTRY
+  if(R.settings.country) {
+    var $countryOpt = $form.find('.country option[value='+R.settings.country+']');
+    if($countryOpt.length) {
+      $countryOpt.attr('selected', true).change();
+    }
+  }
+
   var now = new Date();
   var year = now.getFullYear();
   var month = now.getMonth();
@@ -1142,6 +1219,8 @@ function initBillingInfoForm($form, options) {
     var $yearOpt = $('<option name="'+i+'">'+i+'</option>');
     $yearOpt.appendTo($yearSelect);
   }
+  $yearSelect.val(year+1);
+
 
   // == DISABLE INVALID MONTHS, SELECT CURRENT
   function updateMonths() {
@@ -1214,15 +1293,16 @@ function initBillingInfoForm($form, options) {
 }
 
 
-function pullAccountFields($form, account, accountCode) {
+function pullAccountFields($form, account, options) {
   account.firstName = getField($form, '.contact_info .first_name', V(R.isNotEmpty)); 
   account.lastName = getField($form, '.contact_info .last_name', V(R.isNotEmpty)); 
+  account.companyName = getField($form, '.contact_info .company_name'); 
   account.email = getField($form, '.email', V(R.isNotEmpty), V(R.isValidEmail)); 
-  account.code = accountCode;
+  account.code = options.accountCode;
 }
 
 
-function pullBillingInfoFields($form, billingInfo) {
+function pullBillingInfoFields($form, billingInfo, options) {
   billingInfo.firstName = getField($form, '.billing_info .first_name', V(R.isNotEmpty)); 
   billingInfo.lastName = getField($form, '.billing_info .last_name', V(R.isNotEmpty)); 
   billingInfo.number = getField($form, '.card_number', V(R.isNotEmpty), V(R.isValidCC)); 
@@ -1233,6 +1313,7 @@ function pullBillingInfoFields($form, billingInfo) {
   exp.setFullYear( getField($form, '.year') );
   billingInfo.expires = exp;
 
+  billingInfo.phone = getField($form, '.phone'); 
   billingInfo.address1 = getField($form, '.address1', V(R.isNotEmpty)); 
   billingInfo.address2 = getField($form, '.address2'); 
   billingInfo.city = getField($form, '.city', V(R.isNotEmpty)); 
@@ -1251,12 +1332,10 @@ function verifyTOSChecked($form) {
 R.buildBillingInfoUpdateForm = function(options) {
   var defaults = {
     addressRequirement: 'full'
+  , distinguishContactFromBillingInfo: true 
   };
 
-  options = $.extend({}, defaults, options);
-
-  options.distinguishContactFromBillingInfo = true;
-
+  options = $.extend(createObject(R.settings), defaults, options);
 
   if(!options.accountCode) R.raiseError('accountCode missing');
   if(!options.signature) R.raiseError('signature missing');
@@ -1280,13 +1359,14 @@ R.buildBillingInfoUpdateForm = function(options) {
     $form.find('.invalid').removeClass('invalid');
 
     handleUserErrors(function() {
-      pullBillingInfoFields($form, billingInfo);
+      pullBillingInfoFields($form, billingInfo, options);
 
       $form.addClass('submitting');
       $form.find('button.submit').attr('disabled', true).text('Please Wait');
 
       billingInfo.save({
         signature: options.signature
+      , distinguishContactFromBillingInfo: options.distinguishContactFromBillingInfo
       , accountCode: options.accountCode
       , success: function(response) {
           if(options.afterUpdate)
@@ -1295,7 +1375,7 @@ R.buildBillingInfoUpdateForm = function(options) {
           if(options.successURL) {
             var url = options.successURL;
             // url = R.replaceVars(url, response);
-            R.post(url, response, true);
+            R.post(url, response, options);
           }
         }
       , error: function(errors) {
@@ -1327,6 +1407,39 @@ R.buildBillingInfoUpdateForm = function(options) {
 };
 
 
+function initTOSCheck($form, options) {
+
+  if(options.termsOfServiceURL || options.privacyPolicyURL) {
+    var $tos = $form.find('.accept_tos').html(R.termsOfServiceHTML);
+
+    // If only one, remove 'and' 
+    if(!(options.termsOfServiceURL && options.privacyPolicyURL)) {
+      $tos.find('span.and').remove();
+    }
+
+    // set href or remove tos_link
+    if(options.termsOfServiceURL) {
+      $tos.find('a.tos_link').attr('href', options.termsOfServiceURL);
+    }
+    else {
+      $tos.find('a.tos_link').remove();
+    }
+
+    // set href or remove pp_link
+    if(options.privacyPolicyURL) {
+      $tos.find('a.pp_link').attr('href', options.privacyPolicyURL);
+    }
+    else {
+      $tos.find('a.pp_link').remove();
+    }
+
+  }
+  else {
+    $form.find('.accept_tos').remove();
+  }
+  
+}
+
 R.buildTransactionForm = function(options) {
   var defaults = {
     addressRequirement: 'full'
@@ -1335,7 +1448,7 @@ R.buildTransactionForm = function(options) {
   };
 
   options = $.extend(createObject(R.settings), defaults, options);
-  
+
 
   if(!options.collectContactInfo && !options.accountCode) {
     R.raiseError('collectContactInfo is false, but no accountCode provided');
@@ -1366,16 +1479,11 @@ R.buildTransactionForm = function(options) {
     $form.find('.contact_info').remove();
   }
 
-  if(options.termsOfServiceURL) {
-    var $tos = $form.find('.accept_tos').html(R.termsOfServiceHTML);
-    $tos.find('a').attr('href', options.termsOfServiceURL);
-  }
-  else {
-    $form.find('.accept_tos').remove();
-  }
 
   initCommonForm($form, options);
+  initContactInfoForm($form, options);
   initBillingInfoForm($form, options);
+  initTOSCheck($form, options);
 
   $form.submit(function(e) {
     e.preventDefault(); 
@@ -1386,8 +1494,8 @@ R.buildTransactionForm = function(options) {
     $form.find('.invalid').removeClass('invalid');
 
     handleUserErrors(function() {
-      pullAccountFields($form, account, options.accountCode);
-      pullBillingInfoFields($form, billingInfo);
+      pullAccountFields($form, account, options);
+      pullBillingInfoFields($form, billingInfo, options);
       verifyTOSChecked($form);
 
       $form.addClass('submitting');
@@ -1403,7 +1511,7 @@ R.buildTransactionForm = function(options) {
           if(options.successURL) {
             var url = options.successURL;
             // url = R.replaceVars(url, response);
-            R.post(url, response, true);
+            R.post(url, response, options);
           }
         }
       , error: function(errors) {
@@ -1450,16 +1558,10 @@ R.buildSubscriptionForm = function(options) {
   $form.find('.billing_info').html(R.billingInfoFieldsHTML);
 
 
-  if(options.termsOfServiceURL) {
-    var $tos = $form.find('.accept_tos').html(R.termsOfServiceHTML);
-    $tos.find('a').attr('href', options.termsOfServiceURL);
-  }
-  else {
-    $form.find('.accept_tos').remove();
-  }
- 
-
   initCommonForm($form, options);
+  initContactInfoForm($form, options);
+  initBillingInfoForm($form, options);
+  initTOSCheck($form, options);
 
   if(options.planCode)
     R.Plan.get(options.planCode, gotPlan);
@@ -1481,8 +1583,6 @@ R.buildSubscriptionForm = function(options) {
 
     if(options.filterSubscription)
       subscription = options.filterSubscription(subscription) || subscription; 
-
-    initBillingInfoForm($form, options, billingInfo);
 
     // == EDITABLE PLAN QUANTITY
     if(!plan.displayQuantity) {
@@ -1723,8 +1823,8 @@ R.buildSubscriptionForm = function(options) {
       $form.find('.invalid').removeClass('invalid');
 
       handleUserErrors(function() {
-        pullAccountFields($form, account, options.accountCode);
-        pullBillingInfoFields($form, billingInfo);
+        pullAccountFields($form, account, options);
+        pullBillingInfoFields($form, billingInfo, options);
         verifyTOSChecked($form);
 
         $form.addClass('submitting');
@@ -1738,7 +1838,7 @@ R.buildSubscriptionForm = function(options) {
             if(options.successURL) {
               var url = options.successURL;
               // url = R.replaceVars(url, response);
-              R.post(url, response, true);
+              R.post(url, response, options);
             }
           }
         , error: function(errors) {
@@ -1783,7 +1883,7 @@ R.buildSubscriptionForm = function(options) {
 // Compiled from dom/contact_info_fields.jade
 //////////////////////////////////////////////////
 
-R.contactInfoFieldsHTML = '<div class="title">Contact Info</div><div class="full_name"><div class="field first_name"><div class="placeholder">First Name </div><input type="text"/></div><div class="field last_name"><div class="placeholder">Last Name </div><input type="text"/></div></div><div class="field email"><div class="placeholder">Email </div><input type="text"/></div>';
+R.contactInfoFieldsHTML = '<div class="title">Contact Info</div><div class="full_name"><div class="field first_name"><div class="placeholder">First Name </div><input type="text"/></div><div class="field last_name"><div class="placeholder">Last Name </div><input type="text"/></div></div><div class="field email"><div class="placeholder">Email </div><input type="text"/></div><div class="field phone"><div class="placeholder">Phone Number</div><input type="text"/></div><div class="field company_name"><div class="placeholder">Company/Organization Name</div><input type="text"/></div>';
 
 
 
@@ -1823,7 +1923,7 @@ R.oneTimeTransactionFormHTML = '<form class="recurly update_billing_info"><div c
 // Compiled from dom/terms_of_service.jade
 //////////////////////////////////////////////////
 
-R.termsOfServiceHTML = '<input id="tos_check" type="checkbox"/><label id="accept_tos" for="tos_check">I accept the <a target="_blank" class="tos_link">Terms of Service</a></label>';
+R.termsOfServiceHTML = '<input id="tos_check" type="checkbox"/><label id="accept_tos" for="tos_check">I accept the <a target="_blank" class="tos_link">Terms of Service</a><span class="and"> and </span><a target="_blank" class="pp_link">Privacy Policy</a></label>';
 
 window.Recurly = R;
 
